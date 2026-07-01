@@ -383,12 +383,17 @@ Two cut tools:
   sometimes cancelling it (fixed: defer the revoke); and turf's polygon-clipping code was
   statically imported into the main bundle even though it's Sandbox-only (fixed: lazily
   imported from the store/worker-client, cutting ~47KB off the initial JS payload).
-- [ ] Deploy — held for the user's hosting choice (see below); static build is otherwise
-  deploy-ready (`npm run build` → `out/`, works on any static host, no env vars needed).
+- [x] Deployed to GitHub Pages via `.github/workflows/deploy.yml` (build + lint + test on
+  every push to `main`, then `actions/deploy-pages`). `next.config.ts` picks up
+  `NEXT_PUBLIC_BASE_PATH` (set by the workflow to `/<repo>`) so the static export works
+  from a project subpath; `loadPlates.ts`'s runtime `fetch()` calls needed the same prefix
+  applied manually, since Next's `basePath` only rewrites its own asset/routing system, not
+  arbitrary absolute-path fetches. Verified locally by serving the build under a `/Geollage`
+  subpath before pushing, and again against the live URL after deploy.
+  **Live at https://nawat-john.github.io/Geollage/**
 - [x] README: dev setup, scripts, data-refresh instructions, testing, deployment notes,
   known limitations.
-- **Done when:** it's live, credited, and the two core features + export are robust. Live
-  deploy pending a hosting decision; everything else is done and verified.
+- **Done when:** it's live, credited, and the two core features + export are robust. ✅
 
 ---
 
