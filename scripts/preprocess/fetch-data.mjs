@@ -1,17 +1,22 @@
 // One-off data pipeline: fetch present-day plate topology + finite rotations
 // from the GPlates Web Service and emit static JSON assets under /public/data.
 //
-// Run with: node scripts/preprocess/fetch-data.mjs
-import { simplify } from "@turf/turf";
+// Run with: npm run preprocess (via tsx, so it can reuse the app's TS geometry code)
+import { area, featureCollection, polygon, simplify, union } from "@turf/turf";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { lonLatToVec3 } from "../../lib/geo/spherical.ts";
+import { pointOnPlate } from "../../lib/model/plate.ts";
 
 const GWS = "https://gws.gplates.org";
 const MODEL = "MERDITH2021";
 const MODEL_TIMESPAN = { minMa: 0, maxMa: 1800 };
 const ROTATION_STEP_MA = 10;
 const SIMPLIFY_TOLERANCE_DEG = 0.05; // ~5km at the equator; keeps coastlines recognizable
+const COAST_SIMPLIFY_TOLERANCE_DEG = 0.15;
+const COAST_MIN_AREA_KM2 = 4000; // drops thousands of tiny islets nobody can see at globe scale
+const COAST_PREFILTER_KM2 = 50; // specks not worth feeding to the union
 
 const OUT_DIR = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -35,7 +40,22 @@ function colorForIndex(index, total) {
   return `hsl(${hue}, 62%, 55%)`;
 }
 
-function simplifyRing(ring) {
+// Raw GPlates feature names carry model codes ("Africa AFR_001_000",
+// "NAM_001_000"); strip them to something a student would recognize.
+const NAME_BY_CODE = { NAM: "North America", SAM: "South America" };
+const NAME_OVERRIDES = { NFB: "North Fiji Basin", JUAN_DE_FUCA_11Ma_0Ma: "Juan de Fuca" };
+function cleanName(raw) {
+  if (NAME_OVERRIDES[raw]) return NAME_OVERRIDES[raw];
+  const code = raw.match(/^([A-Z]{3})_\d+_\d+$/);
+  if (code && NAME_BY_CODE[code[1]]) return NAME_BY_CODE[code[1]];
+  return raw
+    .replace(/\s*\(.*\)$/, "")
+    .replace(/\s+[A-Z]{3}_\d+_\d+$/, "")
+    .replace(/_\d+_\d+$/, "")
+    .replace(/(\s+(from PB03 GS|NW15|Plate|plate))+$/, "");
+}
+
+function simplifyRing(ring, tolerance = SIMPLIFY_TOLERANCE_DEG) {
   if (ring.length <= 20) return ring;
   const feature = {
     type: "Feature",
@@ -43,7 +63,7 @@ function simplifyRing(ring) {
     geometry: { type: "Polygon", coordinates: [ring] },
   };
   const simplified = simplify(feature, {
-    tolerance: SIMPLIFY_TOLERANCE_DEG,
+    tolerance,
     highQuality: true,
   });
   const [outRing] = simplified.geometry.coordinates;
@@ -67,7 +87,7 @@ async function fetchPresentDayPlates() {
 
   const plates = fc.features.map((feature, index) => {
     const pid = feature.properties.pid;
-    const name = feature.properties.name ?? `Plate ${pid}`;
+    const name = cleanName(feature.properties.name ?? `Plate ${pid}`);
     return {
       id: `plate-${pid}`,
       plateId: pid,
@@ -130,11 +150,71 @@ async function fetchRotations(plateIds) {
   return rotations;
 }
 
+function majorityPlate(ring, plates) {
+  const SAMPLES = 7;
+  const step = Math.max(1, Math.floor(ring.length / SAMPLES));
+  const votes = new Map();
+  for (let i = 0; i < ring.length; i += step) {
+    const v = lonLatToVec3(ring[i][0], ring[i][1], 1);
+    const plate = plates.find((p) => pointOnPlate(p, v));
+    if (plate) votes.set(plate.plateId, (votes.get(plate.plateId) ?? 0) + 1);
+  }
+  let best = null;
+  for (const [pid, n] of votes) if (best === null || n > votes.get(best)) best = pid;
+  return best ?? "none";
+}
+
+// GWS coastlines come as thousands of terrane polygons with no plate id.
+// Simplifying neighbours independently opens hairline gaps along their shared
+// edges, so: group by the plate each sits on, union per plate (never across
+// plates, or India would weld onto Eurasia), then simplify the merged shapes.
+// The app re-assigns polygons to plates at load time, which also covers cuts.
+async function fetchCoastlines(plates) {
+  console.log(`Fetching present-day coastlines (${MODEL})...`);
+  const fc = await fetchJson(`${GWS}/reconstruct/coastlines/?time=0&model=${MODEL}`);
+  const groups = new Map();
+  for (const feature of fc.features) {
+    const g = feature.geometry;
+    const polygons = g.type === "MultiPolygon" ? g.coordinates : [g.coordinates];
+    for (const poly of polygons) {
+      const outer = poly[0];
+      if (outer.length < 4 || area(polygon([outer])) / 1e6 < COAST_PREFILTER_KM2) continue;
+      const pid = majorityPlate(outer, plates);
+      if (!groups.has(pid)) groups.set(pid, []);
+      groups.get(pid).push(polygon([outer]));
+    }
+  }
+
+  const rings = [];
+  for (const [pid, polys] of groups) {
+    const merged = polys.length > 1 ? union(featureCollection(polys)) : polys[0];
+    if (!merged) continue;
+    const g = merged.geometry;
+    const parts = g.type === "MultiPolygon" ? g.coordinates : [g.coordinates];
+    let kept = 0;
+    for (const part of parts) {
+      if (area(polygon([part[0]])) / 1e6 < COAST_MIN_AREA_KM2) continue;
+      const ring = simplifyRing(part[0], COAST_SIMPLIFY_TOLERANCE_DEG).map(([lon, lat]) => [
+        Math.round(lon * 100) / 100,
+        Math.round(lat * 100) / 100,
+      ]);
+      if (ring.length >= 4) {
+        rings.push(ring);
+        kept++;
+      }
+    }
+    console.log(`  plate ${pid}: ${polys.length} terranes -> ${kept} land polygons`);
+  }
+  console.log(`  -> ${rings.length} coastline polygons`);
+  return rings;
+}
+
 async function main() {
   await mkdir(OUT_DIR, { recursive: true });
 
   const plates = await fetchPresentDayPlates();
   const rotations = await fetchRotations(plates.map((p) => p.plateId));
+  const coastlines = await fetchCoastlines(plates);
 
   const platesGeoJson = {
     format: "tecto-studio-plates",
@@ -176,11 +256,15 @@ async function main() {
     JSON.stringify(rotationsJson),
   );
   await writeFile(
+    path.join(OUT_DIR, "coastlines.json"),
+    JSON.stringify({ format: "tecto-studio-coastlines", schemaVersion: 1, model: MODEL, rings: coastlines }),
+  );
+  await writeFile(
     path.join(OUT_DIR, "attribution.json"),
     JSON.stringify(attribution, null, 2),
   );
 
-  console.log(`Wrote plates.geo.json, rotations.json, attribution.json -> ${OUT_DIR}`);
+  console.log(`Wrote plates.geo.json, rotations.json, coastlines.json, attribution.json -> ${OUT_DIR}`);
 }
 
 main().catch((err) => {

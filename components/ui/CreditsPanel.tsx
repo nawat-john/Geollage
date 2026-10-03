@@ -11,12 +11,12 @@ export function CreditsPanel() {
   if (status !== "ready" || !attribution) return null;
 
   return (
-    <div className="pointer-events-auto absolute bottom-4 right-4">
+    <div className="pointer-events-auto relative">
       {open ? (
         <div
           role="dialog"
           aria-label="Data and credits"
-          className="w-80 rounded-lg bg-black/85 p-4 text-white backdrop-blur-sm"
+          className="absolute top-0 right-0 z-10 w-[min(20rem,calc(100vw-1.5rem))] rounded-xl bg-black/90 p-4 text-white shadow-2xl ring-1 ring-white/10 backdrop-blur-md"
         >
           <div className="mb-2 flex items-start justify-between">
             <h2 className="text-sm font-semibold">Data &amp; credits</h2>
@@ -50,7 +50,7 @@ export function CreditsPanel() {
       ) : (
         <button
           onClick={() => setOpen(true)}
-          className="rounded-lg bg-black/70 px-3 py-1 text-xs text-white/70 backdrop-blur-sm hover:bg-black/85 hover:text-white"
+          className="rounded-xl bg-black/65 px-3 py-2 text-xs text-white/70 shadow-xl ring-1 ring-white/10 backdrop-blur-md hover:text-white"
         >
           Data &amp; credits
         </button>

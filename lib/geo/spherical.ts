@@ -119,3 +119,39 @@ export function incrementalDragRotation(
   const angle = Math.atan2(sinAngle, cosAngle);
   return new Quaternion().setFromAxisAngle(pole, angle);
 }
+
+/**
+ * Whether unit vector `p` lies inside a closed spherical polygon, by summing
+ * the signed angles each edge subtends at `p`. Unlike a planar lon/lat test
+ * this is correct across the antimeridian and around the poles. A ring
+ * winds around both `p` and its antipode, so the side nearer the ring's
+ * vertex average (`mean`, unnormalized is fine) wins — which assumes the
+ * ring encloses less than a hemisphere.
+ */
+export function pointInSphericalPolygon(p: Vector3, verts: readonly Vector3[], mean: Vector3): boolean {
+  if (verts.length < 3 || p.dot(mean) <= 0) return false;
+  let sum = 0;
+  let a = verts[verts.length - 1];
+  for (const b of verts) {
+    const cx = a.y * b.z - a.z * b.y;
+    const cy = a.z * b.x - a.x * b.z;
+    const cz = a.x * b.y - a.y * b.x;
+    sum += Math.atan2(p.x * cx + p.y * cy + p.z * cz, a.dot(b) - a.dot(p) * b.dot(p));
+    a = b;
+  }
+  return Math.abs(sum) > Math.PI;
+}
+
+/** {@link pointInSphericalPolygon} for a [lon, lat] ring. */
+export function pointInSphericalRing(p: Vector3, ring: readonly (readonly [number, number])[]): boolean {
+  const verts = ring.map(([lon, lat]) => lonLatToVec3(lon, lat, 1));
+  const mean = verts.reduce((acc, v) => acc.add(v), new Vector3());
+  return pointInSphericalPolygon(p, verts, mean);
+}
+
+/** Angle in degrees between two orientations (0 = identical). */
+export function quatAngleDeg(a: Quaternion, b: Quaternion): number {
+  // atan2 of the relative rotation stays precise near 0°, where acos(dot) doesn't.
+  const d = a.clone().invert().multiply(b);
+  return radToDeg(2 * Math.atan2(Math.hypot(d.x, d.y, d.z), Math.abs(d.w)));
+}

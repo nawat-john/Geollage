@@ -1,10 +1,20 @@
 import { Vector3 } from "three";
 import { create } from "zustand";
 import { greatCircleCutter } from "../geo/greatCircle";
+import { lonLatToVec3, vec3ToLonLat } from "../geo/spherical";
+import type { Ring } from "../geo/triangulate";
 import type { ProjectCamera, ProjectFileV1 } from "../io/projectFile";
 import { serializeProject } from "../io/projectFile";
+import { parseShareHash } from "../io/shareLink";
 import { loadStudioData, type Attribution } from "../model/loadPlates";
-import { IDENTITY_QUAT, orientationAtTime, type Plate, type Quat } from "../model/plate";
+import { IDENTITY_QUAT, orientationAtTime, pointOnPlate, type Plate, type Quat } from "../model/plate";
+import {
+  PUZZLE_ANCHOR_PLATE_IDS,
+  PUZZLE_PIECE_PLATE_IDS,
+  SNAP_DEG,
+  pieceErrorDeg,
+  puzzleTargets,
+} from "../model/puzzle";
 import { snapshotCamera } from "../three/cameraRegistry";
 import { TOUR_STOPS } from "../data/tour";
 import { cutRingsInWorker } from "../workers/geometryClient";
@@ -12,7 +22,21 @@ import { cutRingsInWorker } from "../workers/geometryClient";
 export type LoadStatus = "idle" | "loading" | "ready" | "error";
 export type StudioMode = "reconstruction" | "sandbox";
 export type SandboxTool = "select" | "drag" | "set-pole" | "cut-great-circle" | "cut-freehand";
-export type DragRotateMode = "free" | "pole";
+export type DragRotateMode = "free" | "pole" | "twist";
+
+/** A place the user pinned, carried along by whichever plate it sits on. */
+export interface Pin {
+  local: [number, number, number]; // present-day frame (same frame as plate.rings)
+  plateId: string | null; // plate it was placed on; re-resolved by position if that plate is gone
+  label: string;
+}
+
+export interface PuzzleState {
+  targets: Record<string, Quat>; // target userTransform per puzzle plate id
+  anchorIds: string[];
+  showHint: boolean;
+  saved: { plates: Plate[]; history: { past: Plate[][]; future: Plate[][] }; timeMa: number };
+}
 
 const MAX_HISTORY = 50;
 
@@ -20,6 +44,9 @@ interface StudioState {
   status: LoadStatus;
   error: string | null;
   plates: Plate[];
+  /** Plates exactly as loaded — the puzzle always starts from these. */
+  basePlates: Plate[];
+  coastlines: Ring[];
   attribution: Attribution | null;
 
   timeMa: number;
@@ -80,6 +107,22 @@ interface StudioState {
 
   showLabels: boolean;
   toggleLabels: () => void;
+  showMotion: boolean;
+  toggleMotion: () => void;
+
+  pin: Pin | null;
+  pinPlacing: boolean;
+  setPinPlacing: (placing: boolean) => void;
+  placePinOnPlate: (plateId: string, world: [number, number, number]) => void;
+  placePinAtLonLat: (lon: number, lat: number, label: string) => void;
+  clearPin: () => void;
+  /** Turn the camera to face the pin where it sits at the current time. */
+  focusPin: () => void;
+
+  puzzle: PuzzleState | null;
+  startPuzzle: () => void;
+  exitPuzzle: () => void;
+  togglePuzzleHint: () => void;
 
   tourStopIndex: number | null;
   startTour: () => void;
@@ -91,6 +134,20 @@ interface StudioState {
 function pushHistory(past: Plate[][], plates: Plate[]): Plate[][] {
   const next = [...past, plates];
   return next.length > MAX_HISTORY ? next.slice(next.length - MAX_HISTORY) : next;
+}
+
+/** Plate a pin sits on, preferring the one it was placed on. */
+export function resolvePinPlate(plates: Plate[], pin: Pin): Plate | undefined {
+  const byId = pin.plateId ? plates.find((p) => p.id === pin.plateId) : undefined;
+  if (byId) return byId;
+  const v = new Vector3(...pin.local);
+  return plates.find((p) => pointOnPlate(p, v));
+}
+
+export function formatLonLat(lon: number, lat: number): string {
+  const ns = lat >= 0 ? "N" : "S";
+  const ew = lon >= 0 ? "E" : "W";
+  return `${Math.abs(lat).toFixed(1)}°${ns}, ${Math.abs(lon).toFixed(1)}°${ew}`;
 }
 
 function newPlateId(): string {
@@ -143,10 +200,24 @@ export const useStudioStore = create<StudioState>((set, get) => {
     set({ selectedPlateId: newPlates[0]?.id ?? null });
   }
 
+  /** Apply a #hash share link (time, camera, pinned place) once data is in. */
+  function applyShareLink() {
+    if (typeof window === "undefined" || !window.location.hash) return;
+    const shared = parseShareHash(window.location.hash);
+    if (shared.timeMa !== undefined) get().setTimeMa(shared.timeMa);
+    if (shared.camera) set({ pendingCamera: { position: shared.camera, target: [0, 0, 0], zoom: 1 } });
+    if (shared.pin) {
+      get().placePinAtLonLat(shared.pin.lon, shared.pin.lat, shared.pin.label);
+      if (!shared.camera) get().focusPin();
+    }
+  }
+
   return {
     status: "idle",
     error: null,
     plates: [],
+    basePlates: [],
+    coastlines: [],
     attribution: null,
 
     timeMa: 0,
@@ -173,21 +244,28 @@ export const useStudioStore = create<StudioState>((set, get) => {
     pendingCamera: null,
 
     showLabels: false,
+    showMotion: false,
+    pin: null,
+    pinPlacing: false,
+    puzzle: null,
     tourStopIndex: null,
 
     loadData: async () => {
       if (get().status === "loading" || get().status === "ready") return;
       set({ status: "loading", error: null });
       try {
-        const { plates, timespan, attribution } = await loadStudioData();
+        const { plates, coastlines, timespan, attribution } = await loadStudioData();
         set({
           status: "ready",
           plates,
+          basePlates: plates,
+          coastlines,
           attribution,
           minTimeMa: timespan.minMa,
           maxTimeMa: timespan.maxMa,
           timeMa: timespan.minMa,
         });
+        applyShareLink();
       } catch (err) {
         set({ status: "error", error: (err as Error).message });
       }
@@ -205,14 +283,16 @@ export const useStudioStore = create<StudioState>((set, get) => {
     hoverPlate: (id) => set({ hoveredPlateId: id }),
     selectPlate: (id) => set({ selectedPlateId: id }),
 
-    setMode: (mode) =>
+    setMode: (mode) => {
+      get().exitPuzzle();
       set({
         mode,
         sandboxTool: "select",
         draggingPlateId: null,
         cuttingPlateId: null,
         cutPreviewPoints: [],
-      }),
+      });
+    },
     setSandboxTool: (tool) =>
       set({ sandboxTool: tool, cuttingPlateId: null, cutPreviewPoints: [], cutError: null }),
     setDragRotateMode: (dragRotateMode) => set({ dragRotateMode }),
@@ -222,8 +302,11 @@ export const useStudioStore = create<StudioState>((set, get) => {
     endDrag: () => set({ draggingPlateId: null }),
 
     commitPlateTransform: (plateId, quat) => {
-      const { plates, history } = get();
-      const nextPlates = plates.map((p) => (p.id === plateId ? { ...p, userTransform: quat } : p));
+      const { plates, history, puzzle } = get();
+      // Puzzle pieces dropped close enough snap exactly onto their target.
+      const target = puzzle?.targets[plateId];
+      const snapped = target && pieceErrorDeg(quat, target) < SNAP_DEG ? target : quat;
+      const nextPlates = plates.map((p) => (p.id === plateId ? { ...p, userTransform: snapped } : p));
       set({ plates: nextPlates, history: { past: pushHistory(history.past, plates), future: [] } });
     },
 
@@ -317,6 +400,7 @@ export const useStudioStore = create<StudioState>((set, get) => {
     },
 
     importProject: (project) => {
+      get().exitPuzzle();
       set({
         mode: project.mode,
         plates: project.plates,
@@ -338,6 +422,83 @@ export const useStudioStore = create<StudioState>((set, get) => {
     },
 
     toggleLabels: () => set((s) => ({ showLabels: !s.showLabels })),
+    toggleMotion: () => set((s) => ({ showMotion: !s.showMotion })),
+
+    setPinPlacing: (pinPlacing) => set({ pinPlacing }),
+    placePinOnPlate: (plateId, world) => {
+      const local = new Vector3(...worldPointToPlateLocal(plateId, world)).normalize();
+      const [lon, lat] = vec3ToLonLat(local);
+      set({
+        pin: { local: [local.x, local.y, local.z], plateId, label: formatLonLat(lon, lat) },
+        pinPlacing: false,
+      });
+    },
+    placePinAtLonLat: (lon, lat, label) => {
+      const local = lonLatToVec3(lon, lat, 1);
+      set({
+        pin: { local: [local.x, local.y, local.z], plateId: null, label: label || formatLonLat(lon, lat) },
+        pinPlacing: false,
+      });
+    },
+    clearPin: () => set({ pin: null, pinPlacing: false }),
+    focusPin: () => {
+      const { pin, plates, timeMa } = get();
+      const plate = pin ? resolvePinPlate(plates, pin) : undefined;
+      if (!pin || !plate) return;
+      const world = new Vector3(...pin.local).applyQuaternion(orientationAtTime(plate, timeMa));
+      const camera = snapshotCamera();
+      const distance = Math.hypot(...camera.position) || 2.8;
+      world.multiplyScalar(distance);
+      set({ pendingCamera: { position: [world.x, world.y, world.z], target: [0, 0, 0], zoom: camera.zoom } });
+    },
+
+    startPuzzle: () => {
+      const { basePlates, plates, history, timeMa, puzzle } = get();
+      if (puzzle) return;
+      const pick = (ids: number[]) =>
+        basePlates.filter((p) => p.plateId !== undefined && ids.includes(p.plateId));
+      const anchors = pick(PUZZLE_ANCHOR_PLATE_IDS);
+      const pieces = [...anchors, ...pick(PUZZLE_PIECE_PLATE_IDS)].map((p) => ({
+        ...p,
+        userTransform: undefined,
+      }));
+      set({
+        mode: "sandbox",
+        sandboxTool: "drag",
+        dragRotateMode: "free",
+        isPlaying: false,
+        tourStopIndex: null,
+        timeMa: 0,
+        plates: pieces,
+        history: { past: [], future: [] },
+        selectedPlateId: null,
+        hoveredPlateId: null,
+        cuttingPlateId: null,
+        cutPreviewPoints: [],
+        pinPlacing: false,
+        puzzle: {
+          targets: puzzleTargets(pieces),
+          anchorIds: anchors.map((p) => p.id),
+          showHint: false,
+          saved: { plates, history, timeMa },
+        },
+      });
+    },
+    exitPuzzle: () => {
+      const { puzzle } = get();
+      if (!puzzle) return;
+      set({
+        puzzle: null,
+        plates: puzzle.saved.plates,
+        history: puzzle.saved.history,
+        timeMa: puzzle.saved.timeMa,
+        selectedPlateId: null,
+        hoveredPlateId: null,
+        draggingPlateId: null,
+      });
+    },
+    togglePuzzleHint: () =>
+      set((s) => (s.puzzle ? { puzzle: { ...s.puzzle, showHint: !s.puzzle.showHint } } : {})),
 
     startTour: () => {
       set({

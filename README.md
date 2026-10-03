@@ -10,6 +10,16 @@ Two headline features:
 - **Sandbox** — grab a plate and drag it around the globe, or slice it into pieces with a
   great-circle or freehand cut, with full undo/redo.
 
+Also:
+
+- **Your place through time** — pin a spot (or use your location) and see where it sat,
+  and the path it travelled, at any point in the timeline.
+- **Motion arrows** — each plate's heading and speed (cm/yr) at the current time.
+- **Pangaea puzzle** — drag the continents back around Africa into their ~250 Ma
+  positions; pieces snap in when close, with a hint overlay.
+- **Share link** — copies a URL whose `#hash` reopens the same time, camera and pinned
+  place (no server involved).
+
 Plus **Export/Import**: save the current state (mode, camera, timeline, plates, any cuts
 or drags) to a `.tecto.json` file and reopen it later — the only persistence layer, since
 there is deliberately no server.
@@ -38,17 +48,24 @@ script (see below) — you don't need to run it just to develop the app.
 | `npm run lint` | ESLint. |
 | `npm test` | Vitest unit tests (geometry math, cut algorithm, project file round-trip). |
 | `npm run test:e2e` | Playwright end-to-end tests (reconstruction, sandbox, export/import) — starts its own dev server. |
-| `npm run preprocess` | Re-fetches plate polygons + rotations from the GPlates Web Service; overwrites `public/data/*.json`. |
+| `npm run preprocess` | Re-fetches plate polygons, rotations and coastlines from the GPlates Web Service; overwrites `public/data/*.json`. |
 
 ## Refreshing the plate data
 
-`scripts/preprocess/fetch-data.mjs` is a one-off Node script (not part of the app bundle)
-that hits the [GPlates Web Service](https://gws.gplates.org) for:
+`scripts/preprocess/fetch-data.mjs` is a one-off script (not part of the app bundle), run
+through `tsx` so it can reuse the app's spherical geometry code. It hits the
+[GPlates Web Service](https://gws.gplates.org) for:
 
 - `topology/plate_polygons` — present-day topological plate boundaries (46 plates for the
   default model), simplified to a reasonable vertex budget.
 - `rotation/get_quaternions` — finite rotation keyframes for each plate, every 10 Ma across
   the model's full time range.
+- `reconstruct/coastlines` — present-day coastlines. GWS returns thousands of terrane
+  polygons with no plate id, so the script assigns each to the plate it sits on, unions
+  them per plate (never across plates), then simplifies — simplifying neighbouring
+  terranes separately leaves hairline gaps across every continent. The app re-assigns
+  land polygons to plates at load time, which also keeps land on the right piece after
+  a Sandbox cut.
 
 Run it with:
 
@@ -56,8 +73,8 @@ Run it with:
 npm run preprocess
 ```
 
-This overwrites `public/data/plates.geo.json`, `public/data/rotations.json`, and
-`public/data/attribution.json`. Commit the regenerated files — they're static assets, not
+This overwrites `public/data/plates.geo.json`, `public/data/rotations.json`,
+`public/data/coastlines.json`, and `public/data/attribution.json`. Commit the regenerated files — they're static assets, not
 generated at build time.
 
 To switch reconstruction models, change `MODEL` at the top of the script (see

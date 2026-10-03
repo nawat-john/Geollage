@@ -2,6 +2,7 @@ import type { Camera, Vector3 } from "three";
 
 interface OrbitControlsLike {
   target: Vector3;
+  enabled: boolean;
 }
 
 /**
@@ -19,6 +20,13 @@ export function registerCamera(c: Camera | null): void {
 
 export function registerControls(c: OrbitControlsLike | null): void {
   controls = c;
+}
+
+/** Stop orbiting immediately, without waiting for React to re-render the
+ * controls' `enabled` prop: the gesture that grabbed a plate already
+ * reached OrbitControls first. */
+export function suspendOrbit(): void {
+  if (controls) controls.enabled = false;
 }
 
 export function snapshotCamera(): { position: [number, number, number]; target: [number, number, number]; zoom: number } {

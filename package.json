@@ -9,7 +9,7 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "preprocess": "node scripts/preprocess/fetch-data.mjs"
+    "preprocess": "tsx scripts/preprocess/fetch-data.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",

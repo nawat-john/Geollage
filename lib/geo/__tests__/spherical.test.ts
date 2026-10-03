@@ -4,6 +4,7 @@ import {
   findBracket,
   incrementalDragRotation,
   lonLatToVec3,
+  pointInSphericalRing,
   slerpQuat,
   vec3ToLonLat,
 } from "../spherical";
@@ -111,5 +112,20 @@ describe("findBracket", () => {
 
   it("lands exactly on a keyframe", () => {
     expect(findBracket(times, 20)).toEqual({ i0: 2, i1: 3, t: 0 });
+  });
+});
+
+describe("pointInSphericalRing", () => {
+  it("handles a ring straddling the antimeridian", () => {
+    const ring: [number, number][] = [[170, -10], [-170, -10], [-170, 10], [170, 10]];
+    expect(pointInSphericalRing(lonLatToVec3(180, 0), ring)).toBe(true);
+    expect(pointInSphericalRing(lonLatToVec3(0, 0), ring)).toBe(false);
+    expect(pointInSphericalRing(lonLatToVec3(160, 0), ring)).toBe(false);
+  });
+
+  it("handles a polar cap ring that runs to the pole along the seam", () => {
+    const ring: [number, number][] = [[-180, -60], [-90, -60], [0, -60], [90, -60], [180, -60], [180, -90], [-180, -90]];
+    expect(pointInSphericalRing(lonLatToVec3(45, -80), ring)).toBe(true);
+    expect(pointInSphericalRing(lonLatToVec3(45, -40), ring)).toBe(false);
   });
 });

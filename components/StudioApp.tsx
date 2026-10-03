@@ -10,6 +10,7 @@ import { CreditsPanel } from "./ui/CreditsPanel";
 import { FileMenu } from "./ui/FileMenu";
 import { InspectorPanel } from "./ui/InspectorPanel";
 import { Onboarding } from "./ui/Onboarding";
+import { PuzzleWin } from "./ui/PuzzlePanel";
 import { Timeline } from "./ui/Timeline";
 import { Toolbar } from "./ui/Toolbar";
 import { TourOverlay } from "./ui/TourOverlay";
@@ -48,17 +49,19 @@ export function StudioApp() {
       onDrop={(e) => void handleDrop(e)}
     >
       <Scene />
-      <div className="pointer-events-none absolute inset-0">
+      {/* z-10 keeps the panels above the 3D scene's HTML labels. */}
+      <div className="pointer-events-none absolute inset-0 z-10">
         <Toolbar />
-        <div className="absolute top-4 left-1/2 -translate-x-1/2">
+        <div className="absolute top-3 right-3 left-3 flex items-start justify-end gap-2 sm:top-4 sm:right-auto sm:left-1/2 sm:-translate-x-1/2">
           <FileMenu />
+          <CreditsPanel />
         </div>
         <InspectorPanel />
+        <PuzzleWin />
         <Timeline />
         <TourOverlay />
         <AutosaveManager />
         <Onboarding />
-        <CreditsPanel />
       </div>
       {dragActive && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center border-4 border-dashed border-amber-400 bg-black/60 text-lg text-white">

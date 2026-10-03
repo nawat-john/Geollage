@@ -1,6 +1,6 @@
 "use client";
 
-import { instantaneousMotion, isIdentityQuat } from "@/lib/model/plate";
+import { instantaneousMotion, isIdentityQuat, plateCentroid, surfaceVelocity } from "@/lib/model/plate";
 import { useStudioStore } from "@/lib/store/useStudioStore";
 
 export function InspectorPanel() {
@@ -10,19 +10,21 @@ export function InspectorPanel() {
   const mode = useStudioStore((s) => s.mode);
   const timeMa = useStudioStore((s) => s.timeMa);
   const resetPlateTransform = useStudioStore((s) => s.resetPlateTransform);
+  const inPuzzle = useStudioStore((s) => s.puzzle !== null);
   const plate = plates.find((p) => p.id === selectedPlateId);
 
-  if (!plate) return null;
+  if (!plate || inPuzzle) return null;
 
   const hasCustomTransform = !!plate.userTransform && !isIdentityQuat(plate.userTransform);
   const parent = plate.derivedFrom ? plates.find((p) => p.id === plate.derivedFrom) : undefined;
   const motion = mode === "reconstruction" ? instantaneousMotion(plate, timeMa) : null;
+  const velocity = motion ? surfaceVelocity(plate, plateCentroid(plate), timeMa) : null;
 
   return (
     <div
       role="region"
       aria-label="Plate inspector"
-      className="pointer-events-auto absolute top-4 right-4 w-64 rounded-lg bg-black/70 p-4 text-white backdrop-blur-sm"
+      className="pointer-events-auto absolute right-3 bottom-40 w-64 rounded-xl bg-black/65 p-4 text-white shadow-xl ring-1 ring-white/10 backdrop-blur-md sm:top-4 sm:right-4 sm:bottom-auto"
     >
       <div className="mb-2 flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">
@@ -75,6 +77,12 @@ export function InspectorPanel() {
             <dt>Angular speed</dt>
             <dd>{motion.degPerMyr.toFixed(2)}°/Myr</dd>
           </div>
+          {velocity && (
+            <div className="flex justify-between">
+              <dt>Speed at its middle</dt>
+              <dd className="text-amber-200">{velocity.cmPerYr.toFixed(1)} cm/yr</dd>
+            </div>
+          )}
         </div>
       )}
       {mode === "sandbox" && (

@@ -28,7 +28,7 @@ export function Onboarding() {
 
   return (
     <div className="pointer-events-auto absolute inset-0 flex items-center justify-center bg-black/70">
-      <div className="max-w-md rounded-lg bg-black/90 p-6 text-white shadow-xl">
+      <div className="mx-4 max-w-md rounded-2xl bg-black/90 p-6 text-white shadow-2xl ring-1 ring-white/10">
         <h2 className="mb-2 text-lg font-semibold">Welcome to Tecto Studio</h2>
         <ul className="mb-4 list-disc space-y-1 pl-5 text-sm text-white/80">
           <li>Drag to orbit the globe; scroll to zoom.</li>
@@ -39,7 +39,11 @@ export function Onboarding() {
           <li>
             <strong>Sandbox</strong> mode lets you drag plates by hand and cut them into pieces.
           </li>
-          <li>Export your work to a file any time — everything runs in your browser, no account needed.</li>
+          <li>
+            Pin <strong>your place</strong> and watch where it was hundreds of millions of years ago, or try the{" "}
+            <strong>Pangaea puzzle</strong>.
+          </li>
+          <li>Export your work or share a link any time — everything runs in your browser, no account needed.</li>
         </ul>
         <button
           onClick={dismiss}

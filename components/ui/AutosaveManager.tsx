@@ -16,6 +16,7 @@ export function AutosaveManager() {
   const importProject = useStudioStore((s) => s.importProject);
   const plates = useStudioStore((s) => s.plates);
   const mode = useStudioStore((s) => s.mode);
+  const inPuzzle = useStudioStore((s) => s.puzzle !== null);
 
   const [recoverable, setRecoverable] = useState<ProjectFileV1 | null>(null);
   const checkedRef = useRef(false);
@@ -32,7 +33,9 @@ export function AutosaveManager() {
 
   // Debounced autosave whenever the working plates/mode change.
   useEffect(() => {
-    if (status !== "ready" || recoverable) return; // don't clobber a pending recovery offer
+    // Don't clobber a pending recovery offer, and never save puzzle pieces
+    // over the user's real work.
+    if (status !== "ready" || recoverable || inPuzzle) return;
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
       void saveAutosave(exportProject());
@@ -41,12 +44,12 @@ export function AutosaveManager() {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, plates, mode, recoverable]);
+  }, [status, plates, mode, recoverable, inPuzzle]);
 
-  if (!recoverable) return null;
+  if (!recoverable || inPuzzle) return null;
 
   return (
-    <div className="pointer-events-auto absolute bottom-20 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-lg bg-black/80 px-4 py-2 text-sm text-white backdrop-blur-sm">
+    <div className="pointer-events-auto absolute bottom-40 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-lg bg-black/80 px-4 py-2 text-sm text-white backdrop-blur-sm">
       <span>Restore your previous session?</span>
       <button
         className="rounded bg-amber-400 px-2 py-1 text-xs font-medium text-black hover:bg-amber-300"

@@ -1,5 +1,5 @@
 import { Quaternion, Vector3 } from "three";
-import { clamp, findBracket, slerpQuat, vec3ToLonLat } from "../geo/spherical";
+import { clamp, findBracket, lonLatToVec3, pointInSphericalPolygon, slerpQuat, vec3ToLonLat } from "../geo/spherical";
 import type { Ring } from "../geo/triangulate";
 
 export type Quat = [x: number, y: number, z: number, w: number];
@@ -35,7 +35,7 @@ export function orientationAtTime(plate: Plate, timeMa: number): Quaternion {
   return user.multiply(base);
 }
 
-function baseOrientationAtTime(plate: Plate, timeMa: number): Quaternion {
+export function baseOrientationAtTime(plate: Plate, timeMa: number): Quaternion {
   const { rotations } = plate;
   if (rotations.length === 0) return new Quaternion();
 
@@ -83,6 +83,70 @@ export function instantaneousMotion(plate: Plate, timeMa: number): Instantaneous
 
   const [poleLon, poleLat] = vec3ToLonLat(axis.normalize());
   return { poleLon, poleLat, degPerMyr: ((angleRad * 180) / Math.PI) / dtMa };
+}
+
+const EARTH_RADIUS_KM = 6371;
+
+/** Unit vector at the vertex average of the plate's first ring, in the
+ * plate's own (present-day) frame — a cheap "middle of the plate" anchor
+ * for labels and arrows. */
+export function plateCentroid(plate: Plate): Vector3 {
+  return plate.rings[0]
+    .reduce((acc, [lon, lat]) => acc.add(lonLatToVec3(lon, lat)), new Vector3())
+    .normalize();
+}
+
+interface RingShape {
+  verts: Vector3[];
+  mean: Vector3;
+  center: Vector3;
+  cosRadius: number; // cos of the angular radius of a cap bounding the ring
+}
+
+const shapeCache = new WeakMap<Ring[], RingShape[]>();
+
+function plateShape(rings: Ring[]): RingShape[] {
+  let shape = shapeCache.get(rings);
+  if (!shape) {
+    shape = rings.map((ring) => {
+      const verts = ring.map(([lon, lat]) => lonLatToVec3(lon, lat, 1));
+      const mean = verts.reduce((acc, v) => acc.add(v), new Vector3());
+      const center = mean.clone().normalize();
+      const cosRadius = Math.min(...verts.map((v) => v.dot(center))) - 1e-6;
+      return { verts, mean, center, cosRadius };
+    });
+    shapeCache.set(rings, shape);
+  }
+  return shape;
+}
+
+/** Whether a present-day-frame unit vector falls on this plate. */
+export function pointOnPlate(plate: Plate, local: Vector3): boolean {
+  return plateShape(plate.rings).some(
+    (r) => local.dot(r.center) >= r.cosRadius && pointInSphericalPolygon(local, r.verts, r.mean),
+  );
+}
+
+/**
+ * Surface velocity of a plate-fixed point at `timeMa`, going forward in
+ * geological time (older -> younger), as a world-space unit direction plus
+ * speed in cm/yr. Null when the plate isn't moving (or has no keyframes).
+ */
+export function surfaceVelocity(
+  plate: Plate,
+  local: Vector3,
+  timeMa: number,
+): { position: Vector3; direction: Vector3; cmPerYr: number } | null {
+  if (plate.rotations.length < 2) return null;
+  const dtMa = 1;
+  const position = local.clone().applyQuaternion(orientationAtTime(plate, timeMa));
+  const earlier = local.clone().applyQuaternion(orientationAtTime(plate, timeMa + dtMa));
+  const angleRad = earlier.angleTo(position);
+  if (!(angleRad > 1e-9)) return null;
+  // Arc length in km per Myr is numerically mm/yr; /10 for cm/yr.
+  const cmPerYr = (angleRad * EARTH_RADIUS_KM) / dtMa / 10;
+  const direction = position.clone().sub(earlier).normalize();
+  return { position, direction, cmPerYr };
 }
 
 export { IDENTITY_QUAT };

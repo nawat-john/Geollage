@@ -197,3 +197,43 @@ export function triangulateRings(
 
   return { positions, normals, indices };
 }
+
+const SEAM_EPS_DEG = 0.01;
+
+function onSeam(a: readonly [number, number], b: readonly [number, number]): boolean {
+  // Edges running along the antimeridian or into a pole are artifacts of how
+  // lon/lat polygons get split, not real boundaries — drawing them leaves a
+  // visible stitch line.
+  const atMeridian = (lon: number) => Math.abs(Math.abs(lon) - 180) < SEAM_EPS_DEG;
+  const atPole = (lat: number) => Math.abs(Math.abs(lat) - 90) < SEAM_EPS_DEG;
+  return (atMeridian(a[0]) && atMeridian(b[0])) || atPole(a[1]) || atPole(b[1]);
+}
+
+/**
+ * Line-segment pairs (xyz, xyz) tracing a closed ring along great circles,
+ * for THREE.LineSegments. Long edges are subdivided so the chords hug the
+ * sphere instead of cutting under it.
+ */
+export function ringOutlineSegments(ring: Ring, radius: number, out: number[] = []): number[] {
+  const a = new Vector3();
+  const b = new Vector3();
+  const p = new Vector3();
+  const q = new Vector3();
+  for (let i = 0; i < ring.length; i++) {
+    const ra = ring[i];
+    const rb = ring[(i + 1) % ring.length];
+    if (onSeam(ra, rb)) continue;
+    lonLatToVec3(ra[0], ra[1], 1, a);
+    lonLatToVec3(rb[0], rb[1], 1, b);
+    const theta = a.angleTo(b);
+    if (theta === 0) continue;
+    const steps = Math.max(1, Math.ceil(theta / MAX_EDGE_STEP_RAD));
+    p.copy(a);
+    for (let s = 1; s <= steps; s++) {
+      q.copy(a).lerp(b, s / steps).normalize(); // fine for short steps
+      out.push(p.x * radius, p.y * radius, p.z * radius, q.x * radius, q.y * radius, q.z * radius);
+      p.copy(q);
+    }
+  }
+  return out;
+}

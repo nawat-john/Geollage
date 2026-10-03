@@ -32,8 +32,16 @@ export interface Attribution {
   fetchedAt: string;
 }
 
+interface CoastlinesJson {
+  format: "tecto-studio-coastlines";
+  schemaVersion: number;
+  model: string;
+  rings: Ring[];
+}
+
 export interface LoadedStudioData {
   plates: Plate[];
+  coastlines: Ring[];
   timespan: { minMa: number; maxMa: number };
   attribution: Attribution;
 }
@@ -51,10 +59,11 @@ async function fetchJson<T>(path: string): Promise<T> {
 }
 
 export async function loadStudioData(): Promise<LoadedStudioData> {
-  const [platesGeo, rotations, attribution] = await Promise.all([
+  const [platesGeo, rotations, attribution, coastlines] = await Promise.all([
     fetchJson<PlatesGeoJson>("/data/plates.geo.json"),
     fetchJson<RotationsJson>("/data/rotations.json"),
     fetchJson<Attribution>("/data/attribution.json"),
+    fetchJson<CoastlinesJson>("/data/coastlines.json"),
   ]);
 
   const plates: Plate[] = platesGeo.plates.map((p) => ({
@@ -66,5 +75,5 @@ export async function loadStudioData(): Promise<LoadedStudioData> {
     rotations: rotations.rotations[String(p.plateId)] ?? [],
   }));
 
-  return { plates, timespan: rotations.timespan, attribution };
+  return { plates, coastlines: coastlines.rings, timespan: rotations.timespan, attribution };
 }

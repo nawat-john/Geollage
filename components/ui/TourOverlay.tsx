@@ -14,7 +14,7 @@ export function TourOverlay() {
   const isLast = tourStopIndex === TOUR_STOPS.length - 1;
 
   return (
-    <div className="pointer-events-auto absolute bottom-24 left-1/2 w-[min(90vw,32rem)] -translate-x-1/2 rounded-lg bg-black/85 p-4 text-white backdrop-blur-sm">
+    <div className="pointer-events-auto absolute bottom-36 left-1/2 w-[min(90vw,32rem)] -translate-x-1/2 rounded-xl bg-black/80 p-4 text-white shadow-2xl ring-1 ring-white/10 backdrop-blur-md">
       <div className="mb-1 flex items-center justify-between">
         <h3 className="text-sm font-semibold">
           {stop.title} <span className="font-normal text-white/50">— {stop.timeMa} Ma</span>
